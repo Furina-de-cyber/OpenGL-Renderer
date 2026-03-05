@@ -143,6 +143,10 @@ Blocker Search 阶段：
 ```bash
 git clone ...
 ```
+将下面的dll文件下载好，放入`./thirdParty/lib/`文件夹下
+
+链接：https://pan.baidu.com/s/1QCcvodto7VJmqMzU2KSffA 
+提取码：r3su
 
 1. 使用 Visual Studio 打开项目根目录下的 `CMakeLists.txt`
 2. 等待 CMake 自动生成缓存
