@@ -174,3 +174,6 @@ git clone ...
 
 - 将 BVH 构建迁移至 GPU
 - 支持更大规模场景
+
+## 资源来源
+本项目模型均来自 https://www.cgmszj.com
