@@ -1,0 +1,86 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+struct horizonalData{
+    float maxtan[8];
+    float depthMip2;
+};
+
+const float PI = 3.14159265;
+
+layout(std430, binding = 0) buffer outputData{
+//    horizonalData data[240][135]; // max num 1920*1080/64
+    horizonalData data[32400]; 
+} outputBuffer;
+
+layout(binding = 0) uniform sampler2D HiZ;
+
+uniform int outWidth;       // 1920------240
+uniform int outHeight;      // 1080------135
+uniform int HiZM0Width;     // 1920
+uniform int HiZM0Height;    // 1080
+uniform float far;
+
+bool validPixelPosition(ivec2 position, ivec2 border){
+    bool xValid = position.x >= 0 && position.x <= border.x - 1;
+    bool yValid = position.y >= 0 && position.y <= border.y - 1;
+    return xValid && yValid;
+}
+
+void main()
+{
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    int lightIndex = int(gl_LocalInvocationID.z);
+    if (coord.x >= outWidth || coord.y >= outHeight)
+        return;
+    
+    const int tileSize = 8;
+    const float lightNum = 8.0f;
+
+    ivec2 tilePixelPosition = coord * tileSize + ivec2(4);
+    vec2 pixelSize = vec2(HiZM0Width, HiZM0Height);
+    vec2 invPixelSize = vec2(1.0f / float(HiZM0Width), 1.0f / float(HiZM0Height));
+    vec2 screenUV = vec2(tilePixelPosition) * invPixelSize;
+
+    float lightAngle = float(lightIndex) * 2 * PI / lightNum;
+    vec2 lightPixelDirection = vec2(cos(lightAngle), sin(lightAngle));
+
+    float sampleRadius = sin(2 * PI / (2 * lightNum));
+    float currentPixelStep = 8.0f;
+
+    const int maxLoop = 5;
+    const int searchNum = 4;
+    const vec2 baseBias[4] = {vec2(-0.5f, -0.5f), vec2(-0.5f, 0.5f), vec2(0.5f, -0.5f), vec2(0.5f, 0.5f)};
+    const float minMipLevel = 3; // log2(8)
+    const float maxMipLevel = 10;
+    float maxTan = 0.0f;
+    float tileZ = textureLod(HiZ, screenUV, minMipLevel - 1.0f).r;
+    for(int i = 0; i < maxLoop; i++){
+        float tryRadius = currentPixelStep * sampleRadius;
+        float mipLevel = clamp(log2(tryRadius), minMipLevel, maxMipLevel);
+        float samplePixelStep = currentPixelStep;
+        float mipPow2 = pow(2, mipLevel);
+        currentPixelStep += 2 * mipPow2;
+        ivec2 sampleCenter = tilePixelPosition + ivec2(lightPixelDirection * samplePixelStep);
+        float nearestDepth = 0.0f;
+        for(int j = 0; j < searchNum; j++){
+            ivec2 samplePoint = sampleCenter + ivec2(baseBias[j] * mipPow2);
+            if(!validPixelPosition(samplePoint, ivec2(pixelSize))){
+                continue;
+            }
+            vec2 sampleUV = vec2(samplePoint) * invPixelSize;
+            float sampleDepth = textureLod(HiZ, sampleUV, mipLevel - 1.0f).r;
+            nearestDepth = max(sampleDepth, nearestDepth);
+        }
+        float deltaU = samplePixelStep * invPixelSize.x;
+        float deltaZ = nearestDepth - tileZ;
+        float tanTheta = deltaZ / deltaU;
+        maxTan = max(maxTan, tanTheta);
+    }
+    int idx = coord.y * outWidth + coord.x;
+    outputBuffer.data[idx].maxtan[lightIndex] = maxTan;
+    if(lightIndex==0){
+        outputBuffer.data[idx].depthMip2 = tileZ;
+    }
+}

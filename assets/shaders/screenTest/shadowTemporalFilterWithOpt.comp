@@ -1,0 +1,75 @@
+#version 460 core
+
+// if ping pong >= 3, lack of share memory
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(r16f, binding = 0) uniform readonly image2D inputTAA;
+layout(r16f, binding = 1) uniform readonly image2D inputHistoryTAA;
+layout(r16f, binding = 2) uniform writeonly image2D outputTAA;
+layout(rgba16f, binding = 3) uniform readonly image2D RoughnessMetallicLinearDepth;
+
+uniform int outWidth;
+uniform int outHeight;
+
+uniform mat4 currentCameraView;
+uniform mat4 historyCameraView;
+uniform mat4 currentCameraInvView;
+uniform mat4 historyCameraInvView;
+uniform mat4 cameraProjection;
+uniform vec2 invSize;
+
+vec4 calcViewPosition(vec2 sampUV, float zview, float proj00, float proj11){
+	vec2 clipXY = sampUV * 2.0f - 1.0f;
+	return vec4(clipXY  * ( - zview) / vec2(proj00, proj11), zview, 1.0f);
+}
+void main()
+{
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    if (coord.x >= outWidth || coord.y >= outHeight)
+        return;
+	vec2 uv = vec2(coord) * invSize;
+
+	vec2 uvPix = uv * vec2(outWidth, outHeight);
+	ivec2 p0 = ivec2(floor(uvPix));
+	vec2 f = fract(uvPix);
+	p0 = clamp(p0, ivec2(0), ivec2(outWidth-2, outHeight-2));
+	float c00 = imageLoad(inputTAA, p0).r;
+	float c10 = imageLoad(inputTAA, p0 + ivec2(1,0)).r;
+	float c01 = imageLoad(inputTAA, p0 + ivec2(0,1)).r;
+	float c11 = imageLoad(inputTAA, p0 + ivec2(1,1)).r;
+	float currentValue = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+
+	float z00 = imageLoad(RoughnessMetallicLinearDepth, p0).b;
+	float z10 = imageLoad(RoughnessMetallicLinearDepth, p0 + ivec2(1,0)).b;
+	float z01 = imageLoad(RoughnessMetallicLinearDepth, p0 + ivec2(0,1)).b;
+	float z11 = imageLoad(RoughnessMetallicLinearDepth, p0 + ivec2(1,1)).b;
+	float currentViewZ = mix(mix(z00, z10, f.x), mix(z01, z11, f.x), f.y);
+
+	vec4 currentViewPosition = calcViewPosition(uv, currentViewZ, cameraProjection[0][0], cameraProjection[1][1]);
+	vec4 worldPosition = currentCameraInvView * currentViewPosition;
+	vec4 historyViewPosition = historyCameraView * worldPosition;
+	vec4 historyClipPosition = cameraProjection * historyViewPosition;
+
+	vec3 historyUVUnlinearZ = historyClipPosition.xyz / historyClipPosition.w;
+	historyUVUnlinearZ.xy = historyUVUnlinearZ.xy * 0.5f + 0.5f;
+	ivec2 historyCoord = ivec2(historyUVUnlinearZ.xy * vec2(outWidth, outHeight));
+
+	vec2 reprojectedUVThreshold = vec2(2.5f, 2.5f) * invSize;
+	bool uvLegal = historyUVUnlinearZ.x >= 0.0f && historyUVUnlinearZ.y >= 0.0f && historyUVUnlinearZ.x <= 1.0f && historyUVUnlinearZ.y <= 1.0f;
+	uvLegal = uvLegal && (historyClipPosition.w > 0.0f);
+	bool uvAllowed = abs(historyUVUnlinearZ.x - uv.x) <= reprojectedUVThreshold.x && abs(historyUVUnlinearZ.y - uv.y) <= reprojectedUVThreshold.y;
+
+	vec2 uvHistoryPix = historyUVUnlinearZ.xy * vec2(outWidth, outHeight);
+	ivec2 p0History = ivec2(floor(uvHistoryPix));
+	vec2 fHistory = fract(uvHistoryPix);
+	p0History = clamp(p0History, ivec2(0), ivec2(outWidth-2, outHeight-2));
+	float h00 = imageLoad(inputHistoryTAA, p0History).r;
+	float h10 = imageLoad(inputHistoryTAA, p0History + ivec2(1,0)).r;
+	float h01 = imageLoad(inputHistoryTAA, p0History + ivec2(0,1)).r;
+	float h11 = imageLoad(inputHistoryTAA, p0History + ivec2(1,1)).r;
+	float historyValue = mix(mix(h00, h10, fHistory.x), mix(h01, h11, fHistory.x), fHistory.y);
+
+	float TAA = uvLegal && uvAllowed ? mix(historyValue, currentValue, 0.10f) : currentValue;
+	imageStore(outputTAA, coord, vec4(TAA, 0.0f, 0.0f, 0.0f));
+}

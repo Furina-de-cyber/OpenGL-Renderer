@@ -1,0 +1,35 @@
+#version 460 core
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(r16f, binding = 0) uniform readonly image2D baseMip;
+layout(r16f, binding = 1) uniform writeonly image2D nextMip;
+
+uniform int inWidth;
+uniform int inHeight;
+uniform int outWidth;
+uniform int outHeight;
+
+uniform bool calcMax; // ensure SIMD effective
+
+void main()
+{
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    if (coord.x >= outWidth || coord.y >= outHeight)
+        return;
+
+    ivec2 border = ivec2(inWidth-1, inHeight-1);
+    ivec2 baseCoord = 2 * coord;
+    ivec2 right = clamp(baseCoord + ivec2(1, 0), ivec2(0), border);
+    ivec2 down  = clamp(baseCoord + ivec2(0, 1), ivec2(0), border);
+    ivec2 rightDown = clamp(baseCoord + ivec2(1, 1), ivec2(0), border);
+
+    float value  = imageLoad(baseMip, baseCoord).r;
+    float rValue = imageLoad(baseMip, right).r;
+    float dValue = imageLoad(baseMip, down).r;
+    float rdValue = imageLoad(baseMip, rightDown).r;
+
+    float aimValue = calcMax ? max(max(value, rValue), max(dValue, rdValue)) : min(min(value, rValue), min(dValue, rdValue));
+
+    imageStore(nextMip, coord, vec4(aimValue, 0.0f, 0.0f, 0.0f));
+}

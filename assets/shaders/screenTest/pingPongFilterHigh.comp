@@ -1,0 +1,40 @@
+#version 460 core
+
+// used when ping pong > 3
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(r16f, binding = 0) uniform readonly image2D inputTexture;
+layout(r16f, binding = 1) uniform writeonly image2D outputTexture;
+
+uniform bool horizonal; // ensure SIMD effective
+uniform int outWidth;
+uniform int outHeight;
+
+void main()
+{
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    if (coord.x >= outWidth || coord.y >= outHeight)
+        return;
+
+    ivec2 center = coord;
+    ivec2 lastCoord = ivec2(0);
+    ivec2 nextCoord = ivec2(0);
+    if(horizonal){
+        lastCoord = max(ivec2(0, 0), center - ivec2(1, 0));
+        nextCoord = min(ivec2(outWidth-1, outHeight-1), center + ivec2(1, 0));
+    }
+    else{
+        lastCoord = max(ivec2(0, 0), center - ivec2(0, 1));
+        nextCoord = min(ivec2(outWidth-1, outHeight-1), center + ivec2(0, 1));
+    }
+    float lastValue = imageLoad(inputTexture, lastCoord).r;
+    float centerValue = imageLoad(inputTexture, center).r;
+    float nextValue = imageLoad(inputTexture, nextCoord).r;
+
+    // average filter
+    float averageValue = (lastValue + centerValue + nextValue) / 3.0f;
+    imageStore(outputTexture, center, vec4(averageValue, 0.0f, 0.0f, 0.0f));
+
+    return;
+}

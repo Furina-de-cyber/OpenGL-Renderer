@@ -1,0 +1,118 @@
+#version 460 core
+
+// if ping pong >= 3, lack of share memory
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16f, binding = 0) uniform readonly image2D inputTAA;
+layout(rgba16f, binding = 1) uniform readonly image2D inputHistoryTAA;
+layout(rgba16f, binding = 2) uniform writeonly image2D outputTAA;
+layout(rgba16f, binding = 3) uniform readonly image2D RoughnessMetallicLinearDepth;
+
+uniform int outWidth;
+uniform int outHeight;
+
+uniform mat4 currentCameraView;
+uniform mat4 historyCameraView;
+uniform mat4 currentCameraInvView;
+uniform mat4 historyCameraInvView;
+uniform mat4 cameraProjection;
+uniform vec2 invSize;
+
+vec4 calcViewPosition(vec2 sampUV, float zview, float proj00, float proj11){
+	vec2 clipXY = sampUV * 2.0f - 1.0f;
+	return vec4(clipXY  * ( - zview) / vec2(proj00, proj11), zview, 1.0f);
+}
+
+float luma(vec3 color) {
+    return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
+void main()
+{
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    if (coord.x >= outWidth || coord.y >= outHeight)
+        return;
+	vec2 uv = vec2(coord) * invSize;
+
+	vec2 uvPix = uv * vec2(outWidth, outHeight);
+	ivec2 p0 = ivec2(floor(uvPix));
+	vec2 f = fract(uvPix);
+	p0 = clamp(p0, ivec2(0), ivec2(outWidth-2, outHeight-2));
+	vec3 c00 = imageLoad(inputTAA, p0).rgb;
+	vec3 c10 = imageLoad(inputTAA, p0 + ivec2(1,0)).rgb;
+	vec3 c01 = imageLoad(inputTAA, p0 + ivec2(0,1)).rgb;
+	vec3 c11 = imageLoad(inputTAA, p0 + ivec2(1,1)).rgb;
+	vec3 currentValue = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+
+	float z00 = imageLoad(RoughnessMetallicLinearDepth, p0).b;
+	float z10 = imageLoad(RoughnessMetallicLinearDepth, p0 + ivec2(1,0)).b;
+	float z01 = imageLoad(RoughnessMetallicLinearDepth, p0 + ivec2(0,1)).b;
+	float z11 = imageLoad(RoughnessMetallicLinearDepth, p0 + ivec2(1,1)).b;
+	float currentViewZ = mix(mix(z00, z10, f.x), mix(z01, z11, f.x), f.y);
+
+	vec4 currentViewPosition = calcViewPosition(uv, currentViewZ, cameraProjection[0][0], cameraProjection[1][1]);
+	vec4 worldPosition = currentCameraInvView * currentViewPosition;
+	vec4 historyViewPosition = historyCameraView * worldPosition;
+	vec4 historyClipPosition = cameraProjection * historyViewPosition;
+
+	vec3 historyUVUnlinearZ = historyClipPosition.xyz / historyClipPosition.w;
+	historyUVUnlinearZ.xy = historyUVUnlinearZ.xy * 0.5f + 0.5f;
+	ivec2 historyCoord = ivec2(historyUVUnlinearZ.xy * vec2(outWidth, outHeight));
+
+	vec2 reprojectedUVThreshold = vec2(2.5f, 2.5f) * invSize;
+	bool uvLegal = historyUVUnlinearZ.x >= 0.0f && historyUVUnlinearZ.y >= 0.0f && historyUVUnlinearZ.x <= 1.0f && historyUVUnlinearZ.y <= 1.0f;
+	uvLegal = uvLegal && (historyClipPosition.w > 0.0f);
+	bool uvAllowed = abs(historyUVUnlinearZ.x - uv.x) <= reprojectedUVThreshold.x && abs(historyUVUnlinearZ.y - uv.y) <= reprojectedUVThreshold.y;
+//  neighbourhood search and clamp is not fit to shadow
+	float lumaMin = 0.0f, lumaMax = 0.0f;
+	{
+		vec3 Value00 = imageLoad(inputTAA, coord + ivec2(-1, -1)).rgb;
+		vec3 Value01 = imageLoad(inputTAA, coord + ivec2(-1,  0)).rgb;
+		vec3 Value02 = imageLoad(inputTAA, coord + ivec2(-1,  1)).rgb;
+		vec3 Value10 = imageLoad(inputTAA, coord + ivec2(0 , -1)).rgb;
+		vec3 Value11 = imageLoad(inputTAA, coord + ivec2(0 ,  0)).rgb;
+		vec3 Value12 = imageLoad(inputTAA, coord + ivec2(0 ,  1)).rgb;
+		vec3 Value20 = imageLoad(inputTAA, coord + ivec2(1 , -1)).rgb;
+		vec3 Value21 = imageLoad(inputTAA, coord + ivec2(1 ,  0)).rgb;
+		vec3 Value22 = imageLoad(inputTAA, coord + ivec2(1 ,  1)).rgb;
+
+		float luma00 = luma(Value00);
+		float luma01 = luma(Value01);
+		float luma02 = luma(Value02);
+		float luma10 = luma(Value10);
+		float luma11 = luma(Value11);
+		float luma12 = luma(Value12);
+		float luma20 = luma(Value20);
+		float luma21 = luma(Value21);
+		float luma22 = luma(Value22);
+
+		float lumaMax0 = max(luma00, max(luma01, luma02));
+		float lumaMax1 = max(luma10, max(luma11, luma12));
+		float lumaMax2 = max(luma20, max(luma21, luma22));
+		lumaMax = max(lumaMax0, max(lumaMax1, lumaMax2));
+
+		float lumaMin0 = min(luma00, min(luma01, luma02));
+		float lumaMin1 = min(luma10, min(luma11, luma12));
+		float lumaMin2 = min(luma20, min(luma21, luma22));
+		lumaMin = min(lumaMin0, min(lumaMin1, lumaMin2));
+ }
+	vec2 uvHistoryPix = historyUVUnlinearZ.xy * vec2(outWidth, outHeight);
+	ivec2 p0History = ivec2(floor(uvHistoryPix));
+	vec2 fHistory = fract(uvHistoryPix);
+	p0History = clamp(p0History, ivec2(0), ivec2(outWidth-2, outHeight-2));
+	vec3 h00 = imageLoad(inputHistoryTAA, p0History).rgb;
+	vec3 h10 = imageLoad(inputHistoryTAA, p0History + ivec2(1,0)).rgb;
+	vec3 h01 = imageLoad(inputHistoryTAA, p0History + ivec2(0,1)).rgb;
+	vec3 h11 = imageLoad(inputHistoryTAA, p0History + ivec2(1,1)).rgb;
+	vec3 historyValue = mix(mix(h00, h10, fHistory.x), mix(h01, h11, fHistory.x), fHistory.y);
+
+	float historyLuma = luma(historyValue);
+	bool lumaLimit = historyLuma >= lumaMin && historyLuma <= lumaMax;
+	uvAllowed = uvAllowed && lumaLimit;
+//	vec3 TAA = uvLegal && uvAllowed ? mix(historyValue * clampLuma, currentValue, 0.10f) : currentValue;
+
+	vec3 TAA = uvLegal && uvAllowed ? mix(historyValue, currentValue, 0.10f) : currentValue;
+//	vec3 TAA = uvLegal && uvAllowed ? mix(historyValue, currentValue, currentWeight) : currentValue;
+	imageStore(outputTAA, coord, vec4(TAA, 1.0f));
+}

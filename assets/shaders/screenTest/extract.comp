@@ -1,0 +1,36 @@
+#version 460 core
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16f, binding = 0) uniform readonly image2D inTex;
+layout(r16f, binding = 1) uniform writeonly image2D outTex;
+
+uniform int inWidth;
+uniform int inHeight;
+
+uniform float far;
+uniform float near;
+
+uniform int channelIndex;
+
+void main()
+{
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    if (coord.x >= inWidth || coord.y >= inHeight)
+        return;
+    float value = 0;
+    if(channelIndex==0){
+        value = imageLoad(inTex, coord).r;
+    }
+    else if(channelIndex==1){
+        value = imageLoad(inTex, coord).g;
+    }
+    else if(channelIndex==2){
+        value = imageLoad(inTex, coord).b;
+    }
+    else{
+        value = imageLoad(inTex, coord).a;
+    }
+    value   = (value > - near)   ? - far : value;
+    imageStore(outTex, coord, vec4(value, 0.0f, 0.0f, 0.0f));
+}
