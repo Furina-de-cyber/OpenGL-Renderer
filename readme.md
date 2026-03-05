@@ -141,7 +141,7 @@ Blocker Search 阶段：
 1. 克隆项目：
 
 ```bash
-git clone ...
+git clone https://github.com/Furina-de-cyber/OpenGL-Renderer.git
 ```
 将下面的dll文件下载好，放入`./thirdParty/lib/`文件夹下
 
