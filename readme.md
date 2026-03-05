@@ -123,7 +123,7 @@ Blocker Search 阶段：
 
 ## 运行截图
 
-![](.\imgs\output.png)
+![](./imgs/output.png)
 
 该场景在RTX 3060 Laptop上，可以稳定166fps运行
 
